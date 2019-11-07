@@ -1,0 +1,13 @@
+# dx: Collection of Decentralized Toy Algorithms
+
+This is a small collection of code experimenting with libp2p under Rust.
+
+Currently it only implements a simple on-disk truststore and a simple peer-to-peer protocol that exchanges the status between peers in form of git hashes (SHA-1).
+
+## Things to do next
+
+ - Complete behavior to keep track of states
+ - Simplify status updates inside protocol
+ - Make status protocol symetric
+ - Retrieve actual status from local git repo
+ - Switch from file to distributed trust store
