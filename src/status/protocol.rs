@@ -88,3 +88,48 @@ where
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::Status;
+    use crate::status::generate_payload;
+    use futures::prelude::*;
+    use libp2p::core::{
+        upgrade,
+        multiaddr::multiaddr,
+        transport::{
+            Transport,
+            ListenerEvent,
+            memory::MemoryTransport
+        }
+    };
+    use rand::{thread_rng, Rng};
+    use std::time::Duration;
+
+    #[test]
+    fn status_send_recv() {
+        let mem_addr = multiaddr![Memory(thread_rng().gen::<u64>())];
+        let mut listener = MemoryTransport.listen_on(mem_addr).unwrap();
+
+        let listener_addr =
+            if let Some(Some(Ok(ListenerEvent::NewAddress(a)))) = listener.next().now_or_never() {
+                a
+            } else {
+                panic!("MemoryTransport not listening on an address!");
+            };
+
+        let payload = generate_payload();
+
+        async_std::task::spawn(async move {
+            let listener_event = listener.next().await.unwrap();
+            let (listener_upgrade, _) = listener_event.unwrap().into_upgrade().unwrap();
+            let conn = listener_upgrade.await.unwrap();
+            upgrade::apply_inbound(conn, Status(payload)).await.unwrap();
+        });
+
+        async_std::task::block_on(async move {
+            let c = MemoryTransport.dial(listener_addr).unwrap().await.unwrap();
+            let received = upgrade::apply_outbound(c, Status([0u8; 20]), upgrade::Version::V1).await.unwrap();
+            assert!(received == payload);
+        });
+    }
+}
