@@ -39,19 +39,18 @@ struct PeerStatus ( Payload, Instant );
 // We create a custom network behaviour that combines Kademlia with
 // regular status requests.
 #[derive(NetworkBehaviour)]
-pub struct Behaviour<TStore> {
-    discovery: Kademlia<TStore>,
+pub struct Behaviour {
+    discovery: Kademlia<MemoryStore>,
     status: Status,
 
     #[behaviour(ignore)]
     peers: Vec<PeerInfo>,
 }
 
-impl Behaviour<MemoryStore> {
+impl Behaviour {
     pub fn new(id: PeerId, state: Payload ) -> Self {
         // Config and setup Kademlia
         let mut cfg = KademliaConfig::default();
-        cfg.set_query_timeout(Duration::from_secs(5 * 60));
 
         let store = MemoryStore::new(id.clone());
 
@@ -78,17 +77,38 @@ impl Behaviour<MemoryStore> {
     }
 }
 
-impl<TStore> NetworkBehaviourEventProcess<KademliaEvent> for Behaviour<TStore> {
+impl NetworkBehaviourEventProcess<KademliaEvent> for Behaviour {
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
-            KademliaEvent::BootstrapResult(Err( .. )) => println!("Bootstrap failed!"),
-            KademliaEvent::GetClosestPeersResult(Ok(result)) => println!("Key: {:#?} => Peers: {:#?}", result.key, result.peers),
+            KademliaEvent::BootstrapResult(result) => {
+                match result {
+                    Ok(..) => println!("Bootstrap successful!"),
+                    Err(error) => println!("Bootstrap failed: {:#?}", error),
+                }
+            },
+            KademliaEvent::GetClosestPeersResult(result) => {
+                match result {
+                    Ok(closest) => {
+                        if let Ok(id) = PeerId::from_bytes(closest.key) {
+
+                            if closest.peers.is_empty() {
+                                self.discovery.get_closest_peers(id.clone());
+                            } else {
+                                println!("Key: {:#?} => Peers: {:#?}", id, closest.peers);
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        println!("Failed to look up peer: {:#?}", error);
+                    },
+                }
+            },
             _ => (),
         }
     }
 }
 
-impl<TStore> NetworkBehaviourEventProcess<StatusEvent> for Behaviour<TStore> {
+impl NetworkBehaviourEventProcess<StatusEvent> for Behaviour {
     fn inject_event(&mut self, event: StatusEvent) {
         if let Ok(StatusSuccess::Received(status)) = event.result {
             println!("Received status '{:#?}' from {:?}", status, event.peer);
