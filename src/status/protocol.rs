@@ -20,10 +20,9 @@
 
 use std::{io, iter};
 
-use futures::{prelude::*, future, try_ready};
+use futures::{future::BoxFuture, prelude::*};
 
-use libp2p::core::{InboundUpgrade, OutboundUpgrade, UpgradeInfo, upgrade::Negotiated};
-use libp2p::tokio_io::{io as nio, AsyncRead, AsyncWrite};
+use libp2p::core::{InboundUpgrade, OutboundUpgrade, UpgradeInfo};
 
 
 /// Payload type of exchanged status information
@@ -54,88 +53,38 @@ impl UpgradeInfo for Status {
     }
 }
 
-type SendStatus<T> = nio::WriteAll<Negotiated<T>, Payload>;
-type Flush<T> = nio::Flush<Negotiated<T>>;
-type Shutdown<T> = nio::Shutdown<Negotiated<T>>;
 
 impl<TSocket> InboundUpgrade<TSocket> for Status
 where
-    TSocket: AsyncRead + AsyncWrite,
+    TSocket: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     type Output = ();
     type Error = io::Error;
-    type Future = future::Map<
-        future::AndThen<
-        future::AndThen<
-            SendStatus<TSocket>,
-            Flush<TSocket>, fn((Negotiated<TSocket>, Payload)) -> Flush<TSocket>>,
-            Shutdown<TSocket>, fn(Negotiated<TSocket>) -> Shutdown<TSocket>>,
-    fn(Negotiated<TSocket>) -> ()>;
+    type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
 
-    #[inline]
-    fn upgrade_inbound(self, socket: Negotiated<TSocket>, _: Self::Info) -> Self::Future {
-        nio::write_all(socket, self.0)
-            .and_then::<fn(_) -> _, _>(|(sock, _)| nio::flush(sock))
-            .and_then::<fn(_) -> _, _>(|sock| nio::shutdown(sock))
-            .map(|_| ())
+    fn upgrade_inbound(self, mut socket: TSocket, _: Self::Info) -> Self::Future {
+        async move {
+            socket.write_all(&self.0).await?;
+            socket.flush().await?;
+            Ok(())
+        }.boxed()
     }
 }
 
 impl<TSocket> OutboundUpgrade<TSocket> for Status
 where
-    TSocket: AsyncRead + AsyncWrite,
+    TSocket: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     type Output = Payload;
     type Error = io::Error;
-    type Future = StatusDialer<Negotiated<TSocket>>;
+    type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
 
-    #[inline]
-    fn upgrade_outbound(self, socket: Negotiated<TSocket>, _: Self::Info) -> Self::Future {
-        StatusDialer {
-            state: StatusDialerState::Read {
-                inner: nio::read_exact(socket, [0; 20]),
-            },
-        }
+    fn upgrade_outbound(self, mut socket: TSocket, _: Self::Info) -> Self::Future {
+        async move {
+            let mut payload = [0u8; 20];
+            socket.read_exact(&mut payload).await?;
+            Ok(payload)
+        }.boxed()
     }
 }
 
-/// A `StatusDialer` is a future that expects to receive the current status.
-pub struct StatusDialer<TSocket> {
-    state: StatusDialerState<TSocket>
-}
-
-enum StatusDialerState<TSocket> {
-   Read {
-       inner: nio::ReadExact<TSocket, Payload>,
-    },
-    Shutdown {
-        inner: nio::Shutdown<TSocket>,
-        payload: Payload,
-    },
-}
-
-impl<TSocket> Future for StatusDialer<TSocket>
-where
-    TSocket: AsyncRead + AsyncWrite,
-{
-    type Item = Payload;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            self.state = match self.state {
-                StatusDialerState::Read { ref mut inner } => {
-                    let (socket, payload) = try_ready!(inner.poll());
-                    StatusDialerState::Shutdown {
-                        inner: nio::shutdown(socket),
-                        payload,
-                    }
-                },
-                StatusDialerState::Shutdown { ref mut inner, payload } => {
-                    try_ready!(inner.poll());
-                    return Ok(Async::Ready(payload));
-                },
-            }
-        }
-    }
-}

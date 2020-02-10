@@ -10,7 +10,6 @@ use libp2p::{
         KademliaEvent,
         record::store::MemoryStore
     },
-    tokio_io::{AsyncRead, AsyncWrite},
 };
 
 use crate::status::{
@@ -40,15 +39,15 @@ struct PeerStatus ( Payload, Instant );
 // We create a custom network behaviour that combines Kademlia with
 // regular status requests.
 #[derive(NetworkBehaviour)]
-pub struct Behaviour<TSubstream: AsyncRead + AsyncWrite, TStore> {
-    discovery: Kademlia<TSubstream, TStore>,
-    status: Status<TSubstream>,
+pub struct Behaviour<TStore> {
+    discovery: Kademlia<TStore>,
+    status: Status,
 
     #[behaviour(ignore)]
     peers: Vec<PeerInfo>,
 }
 
-impl<TSubstream: AsyncRead + AsyncWrite> Behaviour<TSubstream, MemoryStore> {
+impl Behaviour<MemoryStore> {
     pub fn new(id: PeerId, state: Payload ) -> Self {
         // Config and setup Kademlia
         let mut cfg = KademliaConfig::default();
@@ -79,7 +78,7 @@ impl<TSubstream: AsyncRead + AsyncWrite> Behaviour<TSubstream, MemoryStore> {
     }
 }
 
-impl<TSubstream: AsyncRead + AsyncWrite, TStore> NetworkBehaviourEventProcess<KademliaEvent> for Behaviour<TSubstream, TStore> {
+impl<TStore> NetworkBehaviourEventProcess<KademliaEvent> for Behaviour<TStore> {
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
             KademliaEvent::BootstrapResult(Err( .. )) => println!("Bootstrap failed!"),
@@ -89,7 +88,7 @@ impl<TSubstream: AsyncRead + AsyncWrite, TStore> NetworkBehaviourEventProcess<Ka
     }
 }
 
-impl<TSubstream: AsyncRead + AsyncWrite, TStore> NetworkBehaviourEventProcess<StatusEvent> for Behaviour<TSubstream, TStore> {
+impl<TStore> NetworkBehaviourEventProcess<StatusEvent> for Behaviour<TStore> {
     fn inject_event(&mut self, event: StatusEvent) {
         if let Ok(StatusSuccess::Received(status)) = event.result {
             println!("Received status '{:#?}' from {:?}", status, event.peer);

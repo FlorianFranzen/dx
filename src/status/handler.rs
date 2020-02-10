@@ -21,7 +21,7 @@
 use crate::status::protocol;
 
 
-use std::{error::Error, io, fmt, num::NonZeroU32, time::Duration};
+use std::{error::Error, io, fmt, num::NonZeroU32, pin::Pin, time::Duration, task::{Context, Poll}};
 use std::collections::VecDeque;
 
 use futures::prelude::*;
@@ -33,9 +33,8 @@ use libp2p::swarm::{
     ProtocolsHandlerUpgrErr,
     ProtocolsHandlerEvent
 };
-use libp2p::tokio_io::{AsyncRead, AsyncWrite};
 
-use wasm_timer::{Delay, Instant};
+use wasm_timer::Delay;
 
 use void::Void;
 
@@ -165,7 +164,7 @@ impl Error for StatusFailure {
 /// and answering status requests.
 ///
 /// If the remote doesn't respond, produces an error that closes the connection.
-pub struct StatusHandler<TSubstream> {
+pub struct StatusHandler {
     /// Configuration options.
     config: StatusConfig,
     /// The timer for when to send the next request.
@@ -175,30 +174,25 @@ pub struct StatusHandler<TSubstream> {
     pending_results: VecDeque<StatusResult>,
     /// The number of consecutive request failures that occurred.
     failures: u32,
-    _marker: std::marker::PhantomData<TSubstream>
 }
 
-impl<TSubstream> StatusHandler<TSubstream> {
+impl StatusHandler {
     /// Builds a new `StatusHandler` with the given configuration.
     pub fn new(config: StatusConfig) -> Self {
         StatusHandler {
             config,
-            next_request: Delay::new(Instant::now()),
+            next_request: Delay::new(Duration::new(0,0)),
             pending_results: VecDeque::with_capacity(2),
             failures: 0,
-            _marker: std::marker::PhantomData
         }
     }
 }
 
-impl<TSubstream> ProtocolsHandler for StatusHandler<TSubstream>
-where
-    TSubstream: AsyncRead + AsyncWrite,
+impl ProtocolsHandler for StatusHandler
 {
     type InEvent = Void;
     type OutEvent = StatusResult;
     type Error = StatusFailure;
-    type Substream = TSubstream;
     type InboundProtocol = protocol::Status;
     type OutboundProtocol = protocol::Status;
     type OutboundOpenInfo = ();
@@ -235,36 +229,37 @@ where
         }
     }
 
-    fn poll(&mut self) -> Poll<ProtocolsHandlerEvent<protocol::Status, (), StatusResult>, Self::Error> {
+    fn poll(&mut self, cx: &mut Context) -> Poll<ProtocolsHandlerEvent<protocol::Status, (), StatusResult, Self::Error>> {
         if let Some(result) = self.pending_results.pop_back() {
             if let Ok(StatusSuccess::Received ( .. )) = result {
-                let next_request = Instant::now() + self.config.interval;
                 self.failures = 0;
-                self.next_request.reset(next_request);
+                self.next_request.reset(self.config.interval);
             }
             if let Err(e) = result {
                 self.failures += 1;
                 if self.failures >= self.config.max_failures.get() {
-                    return Err(e)
+                    return Poll::Ready(ProtocolsHandlerEvent::Close(e))
                 } else {
-                    return Ok(Async::Ready(ProtocolsHandlerEvent::Custom(Err(e))))
+                    return Poll::Ready(ProtocolsHandlerEvent::Custom(Err(e)))
                 }
             }
-            return Ok(Async::Ready(ProtocolsHandlerEvent::Custom(result)))
+            return Poll::Ready(ProtocolsHandlerEvent::Custom(result))
         }
 
-        match self.next_request.poll() {
-            Ok(Async::Ready(())) => {
-                self.next_request.reset(Instant::now() + self.config.timeout);
+
+        match Future::poll(Pin::new(&mut self.next_request), cx) {
+            Poll::Ready(Ok(())) => {
+                self.next_request.reset(self.config.timeout);
                 let protocol = SubstreamProtocol::new(protocol::Status( self.config.status ))
                     .with_timeout(self.config.timeout);
-                Ok(Async::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
+                Poll::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
                     protocol,
                     info: (),
-                }))
+                })
             },
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => Err(StatusFailure::Other { error: Box::new(e) })
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) =>
+                Poll::Ready(ProtocolsHandlerEvent::Close(StatusFailure::Other { error: Box::new(e) }))
         }
     }
 }

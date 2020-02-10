@@ -5,8 +5,11 @@ use dx::trust::{
 };
 use dx::status::generate_payload;
 
+use async_std::{io, task};
 use futures::{prelude::*, future};
-use libp2p::{Swarm};
+use libp2p::Swarm;
+
+use std::{error::Error, task::{Context, Poll}};
 
 use std::env;
 
@@ -38,7 +41,7 @@ fn main() {
     let status = generate_payload();
 
     // Set up swarm
-    let transport = libp2p::build_development_transport(key.key());
+    let transport = libp2p::build_development_transport(key.key()).unwrap();
     let mut behaviour = Behaviour::new(key.id(), status);
 
     for other in store.ids.iter() {
@@ -54,20 +57,22 @@ fn main() {
 
     // Use tokio to drive the `Swarm`.
     let mut listening = false;
-    tokio::run(future::poll_fn(move || -> Result<_, ()> {
+    task::block_on(future::poll_fn(move |cx: &mut Context| -> Poll<()> {
         loop {
-            match swarm.poll().expect("Error while polling swarm") {
-                Async::Ready(Some(e)) => println!("{:?}", e),
-                Async::Ready(None) | Async::NotReady => {
+            match swarm.poll_next_unpin(cx) {
+                Poll::Ready(Some(e)) => println!("{:?}", e),
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => {
                     if !listening {
-                        if let Some(a) = Swarm::listeners(&swarm).next() {
-                            println!("Listening on {:?}", a);
+                        for addr in Swarm::listeners(&swarm) {
+                            println!("Listening on {:?}", addr);
                             listening = true;
                         }
                     }
-                    return Ok(Async::NotReady)
+                    break
                 }
             }
         }
+        Poll::Pending
     }));
 }
