@@ -55,6 +55,14 @@ fn main() {
     // Tell the swarm to listen on all interfaces and a random, OS-assigned port.
     Swarm::listen_on(&mut swarm, "/ip4/0.0.0.0/tcp/0".parse().unwrap()).unwrap();
 
+    // Try to connect to trusted peers
+    for other in store.ids.iter() {
+        if &other.name != name {
+            Swarm::dial(&mut swarm, other.id());
+        }
+    }
+
+
     // Use tokio to drive the `Swarm`.
     let mut listening = false;
     task::block_on(future::poll_fn(move |cx: &mut Context| -> Poll<()> {
