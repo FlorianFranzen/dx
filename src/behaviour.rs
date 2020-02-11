@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::sync::Mutex;
 
 use libp2p::{
     PeerId,
@@ -22,20 +23,37 @@ use crate::status::{
 };
 
 
+/// Returned events by behavior (unused)
 enum Event {
     PeerOffline,
     PeerOnline,
     PeerStatus,
 }
 
-
-struct PeerInfo {
+/// Internal structure used to track other peers
+#[derive(Clone)]
+pub struct PeerInfo {
     id: PeerId,
     routing: Option<PeerRouting>,
     status: Option<PeerStatus>,
 }
+
+#[derive(Clone)]
 struct PeerRouting ( Vec<PeerId>, Instant);
+
+#[derive(Clone)]
 struct PeerStatus ( Payload, Instant );
+
+impl PeerInfo {
+    pub fn new(id: &PeerId) -> Self {
+        PeerInfo {
+            id: id.clone(),
+            routing: None,
+            status: None,
+        }
+    }
+}
+
 
 // We create a custom network behaviour that combines Kademlia with
 // regular status requests.
@@ -46,7 +64,7 @@ pub struct Behaviour {
     status: Status,
 
     #[behaviour(ignore)]
-    peers: Vec<PeerInfo>,
+    pub peers: Mutex<Vec<PeerInfo>>,
 }
 
 impl Behaviour {
@@ -71,14 +89,21 @@ impl Behaviour {
         Behaviour { kad, mdns, status, peers: Mutex::new(Vec::new()) }
     }
 
+    /// Add peer id to list of watched peers
     pub fn add_peers(&mut self, id: PeerId) {
-        self.peers.push(PeerInfo{
-            id: id.clone(),
-            routing: None,
-            status: None,
-        });
+        self.peers.lock().unwrap().push(PeerInfo::new(&id));
 
-        self.discovery.get_closest_peers(id.clone());
+        self.kad.get_closest_peers(id.clone());
+    }
+
+    /// Retrieve current peer status by id
+    pub fn get_peer_info(&self, id: &PeerId) -> Option<PeerInfo> {
+        for peer in self.peers.lock().unwrap().iter() {
+            if &peer.id == id {
+                return Some(peer.clone())
+            }
+        }
+        None
     }
 }
 
@@ -99,7 +124,12 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for Behaviour {
                             if closest.peers.is_empty() {
                                 self.kad.get_closest_peers(id.clone());
                             } else {
-                                println!("Key: {:#?} => Peers: {:#?}", id, closest.peers);
+                                if let Some(info) = self.get_peer_info(&id) {
+                                    //info.routing = Some(PeerRouting(closest.peers, Instant::now()));
+                                    println!("Updated Kademlia Peers of {:#?}: {:#?}", id, closest.peers);
+                                } else {
+                                    println!("Unknown Peer {:#?}: {:#?}", id, closest.peers);
+                                }
                             }
                         }
                     },
