@@ -6,6 +6,7 @@ Currently it only implements a simple on-disk truststore and a simple peer-to-pe
 
 ## Things to do next
 
+ - Get Kademlia working with IPFS network
  - Complete behavior to keep track of states
  - Simplify status updates inside protocol
  - Make status protocol symetric
