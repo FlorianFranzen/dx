@@ -10,6 +10,7 @@ use libp2p::{
         KademliaEvent,
         record::store::MemoryStore
     },
+    mdns::{Mdns, MdnsEvent},
 };
 
 use crate::status::{
@@ -40,7 +41,8 @@ struct PeerStatus ( Payload, Instant );
 // regular status requests.
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
-    discovery: Kademlia<MemoryStore>,
+    kad: Kademlia<MemoryStore>,
+    mdns: Mdns,
     status: Status,
 
     #[behaviour(ignore)]
@@ -54,16 +56,19 @@ impl Behaviour {
 
         let store = MemoryStore::new(id.clone());
 
-        let mut discovery = Kademlia::with_config(id.clone(), store, cfg);
+        let mut kad = Kademlia::with_config(id.clone(), store, cfg);
 
         // Trigger bootstrap with a stable bootstrap peer
-        discovery.add_address(&"QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".parse().unwrap(), "/ip4/104.131.131.82/tcp/4001".parse().unwrap());
-        discovery.bootstrap();
+        kad.add_address(&"QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".parse().unwrap(), "/ip4/104.131.131.82/tcp/4001".parse().unwrap());
+        kad.bootstrap();
+
+        // Setup mDNS discovery
+        let mdns = Mdns::new().unwrap();
 
         // Configure and setup status protocol
         let status = Status::new(StatusConfig::new( state ).with_keep_alive(true));
 
-        Behaviour { discovery, status, peers: Vec::new() }
+        Behaviour { kad, mdns, status, peers: Mutex::new(Vec::new()) }
     }
 
     pub fn add_peers(&mut self, id: PeerId) {
@@ -92,7 +97,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for Behaviour {
                         if let Ok(id) = PeerId::from_bytes(closest.key) {
 
                             if closest.peers.is_empty() {
-                                self.discovery.get_closest_peers(id.clone());
+                                self.kad.get_closest_peers(id.clone());
                             } else {
                                 println!("Key: {:#?} => Peers: {:#?}", id, closest.peers);
                             }
@@ -104,6 +109,26 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for Behaviour {
                 }
             },
             _ => (),
+        }
+    }
+}
+
+impl NetworkBehaviourEventProcess<MdnsEvent> for Behaviour {
+    fn inject_event(&mut self, event: MdnsEvent) {
+        match event {
+            MdnsEvent::Discovered(list) => {
+                for (peer, addr) in list {
+                    // Add discovered nodes to kademlia
+                    self.kad.add_address(&peer, addr.clone());
+
+                    println!("Discovered {:#?} via {:#?}", peer, addr);
+                }
+            },
+            MdnsEvent::Expired(list) => {
+                for (peer, addr) in list {
+                    println!("Expired {:#?} via {:#?}", peer, addr);
+                }
+            }
         }
     }
 }
