@@ -23,6 +23,16 @@ use crate::status::{
 };
 
 
+const BOOTSTRAP_NODES : [(&str, &str); 5] = [
+    // Old, 1024 bit key, soon to be deprecated
+    ("QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ", "/ip4/104.131.131.82/tcp/4001"),
+    // New, 2048 bit key, from dnsaddr of bootstrap.libp2p.io
+    ("QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb", "/ip4/147.75.83.83/tcp/4001"),
+    ("QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa", "/ip4/147.75.77.187/tcp/4001"),
+    ("QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt", "/ip4/147.75.94.115/tcp/4001"),
+    ("QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN", "/ip4/147.75.69.143/tcp/4001"),
+];
+
 /// Returned events by behavior (unused)
 enum Event {
     PeerOffline,
@@ -76,8 +86,11 @@ impl Behaviour {
 
         let mut kad = Kademlia::with_config(id.clone(), store, cfg);
 
-        // Trigger bootstrap with a stable bootstrap peer
-        kad.add_address(&"QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ".parse().unwrap(), "/ip4/104.131.131.82/tcp/4001".parse().unwrap());
+        // Trigger bootstrap with default IPFS nodes
+        for (id, addr) in BOOTSTRAP_NODES.iter() {
+            kad.add_address(&id.parse().unwrap(), addr.parse().unwrap());
+        }
+
         kad.bootstrap();
 
         // Setup mDNS discovery
